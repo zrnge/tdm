@@ -12,7 +12,7 @@ pathfinding.
 
 ## Built with
 
-- **Navt Coder** — model: DeepSeek 4.1 Flash
+- **Navy Coder** — model: DeepSeek 4.1 Flash
 - **Claude Code** — model: Claude Opus 5.5
 
 ## Run it
