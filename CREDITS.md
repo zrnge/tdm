@@ -6,7 +6,7 @@
 - **Play:** [zrnge.com/tdm](https://zrnge.com/tdm)
 - **Source:** [github.com/zrnge/tdm](https://github.com/zrnge/tdm)
 - **Built with AI coding tools:**
-  - Navt Coder — model: DeepSeek 4.1 Flash
+  - Navy Coder — model: DeepSeek 4.1 Flash
   - Claude Code — model: Claude Opus 5.5
 
 ---
