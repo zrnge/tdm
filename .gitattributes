@@ -1,0 +1,11 @@
+# Normalise line endings for text; never touch binary assets.
+* text=auto
+
+*.glb binary
+*.gltf binary
+*.wav binary
+*.ogg binary
+*.mp3 binary
+*.png binary
+*.jpg binary
+*.hdr binary

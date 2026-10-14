@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Model Inspection &mdash; Warehouse TDM</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0; background: #0b0e13; color: #d7e0ea;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      #log { padding: 16px; white-space: pre-wrap; }
+      .h { color: #7fd1ff; font-weight: 700; }
+      .ok { color: #6ee7a8; }
+      .warn { color: #ffcc66; }
+      .err { color: #ff7b7b; }
+      .dim { color: #6b7a8d; }
+    </style>
+  </head>
+  <body>
+    <div id="log">Inspecting models&hellip;</div>
+    <script type="module" src="/src/inspect/inspect.ts"></script>
+  </body>
+</html>

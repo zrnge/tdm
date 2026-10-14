@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <title>Warehouse TDM</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230b0e13'/%3E%3Ccircle cx='8' cy='8' r='4' fill='%236fd3ff'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/src/styles/hud.css" />
+  </head>
+  <body>
+    <!-- Three.js renders into this canvas -->
+    <canvas id="game-canvas"></canvas>
+
+    <!-- HUD overlay root (populated in Phase 5) -->
+    <div id="hud" class="hud" aria-hidden="true"></div>
+
+    <!-- Loading / click-to-play overlay -->
+    <div id="boot" class="boot">
+      <div class="boot__panel">
+        <h1 class="boot__title">WAREHOUSE TDM</h1>
+        <p class="boot__status" id="boot-status">Loading&hellip;</p>
+        <button id="boot-start" class="boot__button" disabled>CLICK TO PLAY</button>
+        <button id="boot-credits" class="boot__button boot__button--ghost">CREDITS</button>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
