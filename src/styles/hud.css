@@ -741,3 +741,94 @@ html, body {
 
 /* The boot button styles add a left margin for side-by-side layout. */
 .pause__button { margin-left: 0; }
+
+/* Settings sliders (mouse / ADS sensitivity). */
+.settings__slider {
+  width: 190px;
+  accent-color: #6fd3ff;
+  cursor: pointer;
+}
+
+.settings__value {
+  min-width: 3.2em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: #cfe4f5;
+  font-weight: 700;
+}
+
+/* FPS counter, top-left. Above the HUD, below every menu. */
+.fps {
+  position: fixed;
+  top: 8px;
+  left: 10px;
+  z-index: 40;
+  padding: 3px 7px;
+  font: 600 12px/1.3 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color: #9fe6a0;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 3px;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.fps--low { color: #ffc46b; }
+
+/* Developer line under the start-screen buttons. */
+.boot__dev {
+  margin: 28px 0 0;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  color: #6f8296;
+}
+
+.boot__dev a {
+  color: #9fd8f5;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(111, 211, 255, 0.35);
+}
+
+.boot__dev a:hover { color: #d6f1ff; border-bottom-color: #6fd3ff; }
+
+.boot__dev span { margin: 0 8px; color: #3d4c5c; }
+
+/* ---------- end-of-match screen ---------- */
+
+.match-end__panel { min-width: 340px; }
+
+.match-end__title--win { color: #6fd3ff; }
+.match-end__title--loss { color: #ff8a7a; }
+
+.match-end__score {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #e6eef6;
+}
+
+.match-end__table {
+  width: 100%;
+  margin: 4px 0 10px;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: #c9d6e2;
+}
+
+.match-end__table th {
+  padding: 4px 6px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: #6f8296;
+  text-align: right;
+}
+
+.match-end__table th:first-child,
+.match-end__table td:first-child { text-align: left; }
+
+.match-end__table td { padding: 4px 6px; text-align: right; }
+
+.match-end__row--blue td:first-child { color: #7fb2ff; }
+.match-end__row--red td:first-child { color: #ff8a8a; }
+.match-end__row--you { background: rgba(111, 211, 255, 0.1); font-weight: 700; }

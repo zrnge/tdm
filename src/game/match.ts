@@ -27,8 +27,8 @@ export interface MatchState {
 }
 
 export interface MatchOptions {
-  /** Called once when the match ends. */
-  onEnd?(winner: TeamId): void;
+  /** Called once when the match ends, with the winner or null for a draw. */
+  onEnd?(winner: TeamId | null): void;
 }
 
 export function createMatch(opts: MatchOptions = {}): MatchState {
@@ -94,7 +94,7 @@ export function createMatch(opts: MatchOptions = {}): MatchState {
           running = false;
           winner = null;
           console.log(`[match] over — draw at ${scores.blue} : ${scores.red}`);
-          opts.onEnd?.('blue');
+          opts.onEnd?.(null);
         }
       }
     },

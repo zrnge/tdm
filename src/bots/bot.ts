@@ -92,34 +92,36 @@ export interface DifficultyPreset {
 }
 
 export const DIFFICULTY: Record<Difficulty, DifficultyPreset> = {
+  // Aim was retuned after playtesting: on the old values one Normal bot landed
+  // 88% of its shots on a standing player at 6-10 m and killed in ~0.5 s.
   easy: {
-    reactionMin: 0.6,
-    reactionMax: 0.8,
+    reactionMin: 0.65,
+    reactionMax: 0.9,
     initialError: 12,
-    minError: 2.4,
-    tightenTime: 1.6,
+    minError: 4.6,
+    tightenTime: 2.2,
     burstMin: 2,
     burstMax: 4,
     flankChance: 0.25,
     coverUse: 0.2,
   },
   normal: {
-    reactionMin: 0.3,
-    reactionMax: 0.5,
-    initialError: 8,
-    minError: 1.1,
-    tightenTime: 1.0,
+    reactionMin: 0.35,
+    reactionMax: 0.6,
+    initialError: 9,
+    minError: 3.4,
+    tightenTime: 1.6,
     burstMin: 3,
     burstMax: 6,
     flankChance: 0.55,
     coverUse: 0.5,
   },
   hard: {
-    reactionMin: 0.2,
-    reactionMax: 0.3,
-    initialError: 5,
-    minError: 0.6,
-    tightenTime: 0.6,
+    reactionMin: 0.25,
+    reactionMax: 0.4,
+    initialError: 7,
+    minError: 2.1,
+    tightenTime: 1.1,
     burstMin: 5,
     burstMax: 9,
     flankChance: 0.85,
@@ -161,6 +163,8 @@ export interface Bot {
   setDifficulty(d: Difficulty): void;
   /** Moves the bot to `to` and clears its path. Used on respawn. */
   teleport(to: THREE.Vector3): void;
+  /** Forgets everything — target, sounds, cover, aim — for a new match. */
+  resetForMatch(): void;
   /** Tells the bot a gunshot happened at `at`, so it can turn toward it. */
   hearGunshot(at: THREE.Vector3): void;
   /** A noise of `radius` metres at `at` (footsteps). */
@@ -189,6 +193,8 @@ export interface BotManager {
   notifyDamaged(targetId: string, attacker: Combatant | null): void;
   /** A reload by `sourceTeam`, heard by the other team. */
   broadcastReload(at: THREE.Vector3, sourceTeam: TeamId, duration: number): void;
+  /** Wipes every bot's memory and the squads' shared intel, for a new match. */
+  resetMatch(): void;
   /** Squad state per team, for the debug overlay and tests. */
   readonly squads: ReadonlyMap<TeamId, Squad>;
   setDifficulty(d: Difficulty): void;
@@ -749,6 +755,28 @@ export function createBot(opts: CreateBotOptions): Bot {
   let sightTime = 0;
   /** Current aim error half-angle, degrees. */
   let aimError = preset.initialError;
+  // The target's measured speed, for the moving-target aim penalty.
+  const aimTargetPrev = new THREE.Vector3();
+  let aimTargetSpeed = 0;
+
+  // ---- spreading out ----
+  // Every bot chasing the same last-known position or the same gunshot used to
+  // arrive at the same spot and stand in a clump. Each bot instead heads for its
+  // own slot on a ring around the shared goal; the golden angle keeps any two
+  // slots well apart whatever the squad size.
+  const slotIndex = Number(/(\d+)$/.exec(id)?.[1] ?? 0);
+  const slotBase = new THREE.Vector3(Infinity, 0, 0);
+  const slotGoal = new THREE.Vector3();
+  function spreadGoal(base: THREE.Vector3): THREE.Vector3 {
+    if (slotBase.distanceToSquared(base) > 1) {
+      slotBase.copy(base);
+      const a = slotIndex * 2.39996;
+      _v2.set(base.x + Math.cos(a) * T.spreadRadius, 0, base.z + Math.sin(a) * T.spreadRadius);
+      const snapped = floorPoint(navmesh, _v2, 2.5);
+      slotGoal.copy(snapped ?? base);
+    }
+    return slotGoal;
+  }
   let burstRemaining = 0;
   let burstPause = 0;
 
@@ -1004,7 +1032,7 @@ export function createBot(opts: CreateBotOptions): Bot {
       const dz = position.z - c.position.z;
       const d = Math.hypot(dx, dz);
       if (d < S.separation && d > 1e-3) {
-        const w = ((S.separation - d) / S.separation) * 0.6;
+        const w = ((S.separation - d) / S.separation) * 0.9;
         px += (dx / d) * w;
         pz += (dz / d) * w;
       }
@@ -1041,8 +1069,26 @@ export function createBot(opts: CreateBotOptions): Bot {
   }
 
   function brake(dt: number) {
-    velocity.x = approach(velocity.x, 0, BOT.accel * dt);
-    velocity.z = approach(velocity.z, 0, BOT.accel * dt);
+    // Standing still, a bot still edges away from a teammate pressed against
+    // it — otherwise two bots that stopped side by side stay stacked forever.
+    let px = 0;
+    let pz = 0;
+    for (const c of combat.combatants) {
+      if (c === combatant || c.team !== team || !c.alive) continue;
+      const dx = position.x - c.position.x;
+      const dz = position.z - c.position.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 1.6 && d > 1e-3) {
+        px += (dx / d) * (1.6 - d);
+        pz += (dz / d) * (1.6 - d);
+      }
+    }
+    const probe = feet().clone();
+    probe.x += px;
+    probe.z += pz;
+    const canStep = (px !== 0 || pz !== 0) && navmesh.isWalkable(probe, 0.5);
+    velocity.x = approach(velocity.x, canStep ? px * 1.5 : 0, BOT.accel * dt);
+    velocity.z = approach(velocity.z, canStep ? pz * 1.5 : 0, BOT.accel * dt);
   }
 
   function turnToward(dir: THREE.Vector3, dt: number, fast = false) {
@@ -1205,6 +1251,12 @@ export function createBot(opts: CreateBotOptions): Bot {
     // Hold fire rather than shoot a teammate in the back.
     if (blind) _aimPoint.copy(lastKnown!).setY(lastKnown!.y + BOT.aim.aimHeight);
     else chestOf(target, _aimPoint);
+    // Never fire where the body is not facing. Running to cover facing the
+    // route, a bot used to shoot sideways at a target it was not looking at.
+    _v1.subVectors(_aimPoint, position).setY(0).normalize();
+    if (-Math.sin(yaw) * _v1.x - Math.cos(yaw) * _v1.z < Math.cos(THREE.MathUtils.degToRad(T.fireConeDeg))) {
+      return false;
+    }
     if (teammateInTheWay(_aimPoint)) {
       burstPause = 0.25;
       strafeTimer = 0; // step aside for a clear line
@@ -1270,6 +1322,14 @@ export function createBot(opts: CreateBotOptions): Bot {
       const speed = Math.hypot(velocity.x, velocity.z);
       converged *= THREE.MathUtils.lerp(1, BOT.aim.movingScale, THREE.MathUtils.clamp((speed - 0.4) / 2.5, 0, 1));
       if (crouching) converged *= BOT.aim.crouchScale;
+      // A target crossing the line of sight is harder to track: strafing must
+      // be worth something. Its speed is measured, not read from the player.
+      if (target) {
+        const ts = aimTargetPrev.distanceTo(target.position) / Math.max(dt, 1e-3);
+        aimTargetPrev.copy(target.position);
+        aimTargetSpeed = THREE.MathUtils.lerp(aimTargetSpeed, Math.min(ts, 8), 1 - Math.exp(-dt * 8));
+        converged *= 1 + THREE.MathUtils.clamp(aimTargetSpeed / 4, 0, 1) * (BOT.aim.movingTargetScale - 1);
+      }
       aimError = converged;
     } else {
       aimError = Math.max(aimError, preset.minError);
@@ -1291,6 +1351,22 @@ export function createBot(opts: CreateBotOptions): Bot {
    * side of its prop, not toward the threat, unclaimed, and — checked last
    * because it is a raycast — actually hidden from the threat's eye.
    */
+  /** True when a teammate stands, or has claimed cover, within `S.coverSpacing` of `spot`. */
+  function crowded(spot: CoverSpot): boolean {
+    const r2 = S.coverSpacing * S.coverSpacing;
+    for (const other of opts.coverSpots) {
+      if (other === spot || !other.claimedBy || other.claimedBy === id) continue;
+      if (other.position.distanceToSquared(spot.position) < r2) return true;
+    }
+    for (const c of combat.combatants) {
+      if (c === combatant || c.team !== team || !c.alive) continue;
+      const dx = c.position.x - spot.position.x;
+      const dz = c.position.z - spot.position.z;
+      if (dx * dx + dz * dz < r2) return true;
+    }
+    return false;
+  }
+
   function findCover(threat: THREE.Vector3): CoverSpot | null {
     const myDist = horizontalDistance(position, threat);
     let best: CoverSpot | null = null;
@@ -1298,6 +1374,10 @@ export function createBot(opts: CreateBotOptions): Bot {
     const candidates: { spot: CoverSpot; score: number }[] = [];
     for (const spot of opts.coverSpots) {
       if (spot.claimedBy && spot.claimedBy !== id) continue;
+      // Spread out: never pick a spot right next to a teammate or a spot a
+      // teammate has claimed. Adjacent spots on one crate otherwise filled up
+      // together and the squad stacked into one grenade-sized clump.
+      if (crowded(spot)) continue;
       const d = horizontalDistance(position, spot.position);
       if (d > T.coverSearchRadius) continue;
       _v1.subVectors(threat, spot.position).setY(0);
@@ -1371,12 +1451,16 @@ export function createBot(opts: CreateBotOptions): Bot {
       }
     }
     // Patrol drifts toward the middle and the enemy's half of the hall — where
-    // the fight is — rather than wandering in circles at home.
+    // the fight is — rather than wandering in circles at home. Each bot keeps
+    // to its own lane (west flank, east flank, centre-left, centre-right), so
+    // the squad sweeps the hall abreast instead of walking it in a clump.
     const enemy = TEAM[enemyTeam].spawnCenter;
+    const lanes = BOT.patrol.lanes;
+    const laneX = lanes[(Math.max(slotIndex, 1) - 1) % lanes.length];
     const anchor = _v1
-      .set(position.x, 0, position.z)
-      .lerp(_v2.set(enemy.x * 0.5, 0, enemy.z * 0.5), 0.5);
-    const point = navmesh.randomPointAround(anchor, BOT.patrol.wanderRadius);
+      .set(laneX, 0, position.z)
+      .lerp(_v2.set(laneX, 0, enemy.z * 0.5), 0.5);
+    const point = navmesh.randomPointAround(anchor, BOT.patrol.laneWander);
     if (usable(point)) {
       repath(point);
     } else {
@@ -1391,7 +1475,9 @@ export function createBot(opts: CreateBotOptions): Bot {
   /** A point to one side of `around`, approached from an angle. */
   function planFlank(around: THREE.Vector3): THREE.Vector3 | null {
     _v1.subVectors(around, position).setY(0).normalize();
-    const side = Math.random() < 0.5 ? -1 : 1;
+    // Odd and even bots take opposite sides, so two flankers split up instead
+    // of queuing through the same gap.
+    const side = slotIndex % 2 === 0 ? 1 : -1;
     for (const s of [side, -side]) {
       const perp = _v2.set(-_v1.z * s, 0, _v1.x * s);
       const p = around.clone().addScaledVector(perp, T.flankOffset).addScaledVector(_v1, -2).setY(0);
@@ -1537,7 +1623,7 @@ export function createBot(opts: CreateBotOptions): Bot {
     // Lost sight: approach the last known position at a walk, weapon up.
     state = 'Engage';
     const goal = lastKnown!;
-    const arrived = moveTo(goal, T.pushSpeed, dt, 1.2);
+    const arrived = moveTo(spreadGoal(goal), T.pushSpeed, dt, 1.2);
     if (horizontalDistance(position, goal) < T.preAimRange) lookAt(goal, dt);
     else faceTravel(dt);
     if (arrived) {
@@ -1549,7 +1635,7 @@ export function createBot(opts: CreateBotOptions): Bot {
 
   function stateFlank(dt: number) {
     state = 'Flank';
-    const arrived = moveTo(flankPoint!, BOT.sprintSpeed, dt, 1);
+    const arrived = moveTo(spreadGoal(flankPoint!), BOT.sprintSpeed, dt, 1);
     if (lastKnown && horizontalDistance(position, lastKnown) < T.preAimRange) lookAt(lastKnown, dt);
     else faceTravel(dt);
     if (arrived) flankPoint = null; // now push the last known position
@@ -1576,22 +1662,7 @@ export function createBot(opts: CreateBotOptions): Bot {
     }
     if (state === 'Dead') {
       // Respawned.
-      state = 'Patrol';
-      deathProgress = 0;
-      path = [];
-      pathIndex = 0;
-      pathGoal = null;
-      forgetTarget();
-      heard = false;
-      heardAt = null;
-      reactionTimer = 0;
-      sightTime = 0;
-      aimError = preset.initialError;
-      burstRemaining = 0;
-      burstPause = 0;
-      sinceHit = 99;
-      threatFrom = null;
-      pickPatrolPoint();
+      clearMind();
       return;
     }
 
@@ -1700,7 +1771,7 @@ export function createBot(opts: CreateBotOptions): Bot {
 
     if (heard && heardAt) {
       state = 'Patrol';
-      const arrived = moveTo(heardAt, T.pushSpeed, dt, 1.5);
+      const arrived = moveTo(spreadGoal(heardAt), T.pushSpeed, dt, 1.5);
       if (horizontalDistance(position, heardAt) < T.preAimRange) lookAt(heardAt, dt, false);
       else faceTravel(dt);
       if (arrived) {
@@ -1785,6 +1856,29 @@ export function createBot(opts: CreateBotOptions): Bot {
     lastHealth = combatant.health;
 
     weapon.update(dt, { speed, crouching, aiming: false });
+  }
+
+  /** Back to a fresh patrol with no memory: after a respawn or a new match. */
+  function clearMind() {
+    state = 'Patrol';
+    deathProgress = 0;
+    path = [];
+    pathIndex = 0;
+    pathGoal = null;
+    forgetTarget();
+    heard = false;
+    heardAt = null;
+    heardTimer = 0;
+    reactionTimer = 0;
+    sightTime = 0;
+    aimError = preset.initialError;
+    burstRemaining = 0;
+    burstPause = 0;
+    sinceHit = 99;
+    threatFrom = null;
+    rushTimer = 0;
+    releaseCover();
+    pickPatrolPoint();
   }
 
   /**
@@ -1884,6 +1978,11 @@ export function createBot(opts: CreateBotOptions): Bot {
       if (eye.distanceTo(at) > T.calloutRadius) return;
       investigate(at, 5);
     },
+    resetForMatch() {
+      weapon.refill();
+      weapon.reset();
+      clearMind();
+    },
     notifyDamaged(attacker) {
       sinceHit = 0;
       if (!attacker) return;
@@ -1969,10 +2068,36 @@ function createBotHitProxies(rig: CharacterRig) {
   body.name = 'bot-hitbox-body';
   place(body, spine, lift);
 
+  // ---- legs ----
+  // Without these a bot was only hittable from the hips up, while the player's
+  // proxy runs from the feet: every round aimed below a bot's belt passed
+  // straight through it. Each segment is a capsule laid along its bone in the
+  // rest pose and attached to the upper bone, so it follows the animation.
+  const legs: THREE.Mesh[] = [];
+  const limb = (from: THREE.Object3D | undefined, to: THREE.Object3D | undefined, r: number, name: string) => {
+    if (!from || !to) return;
+    const a = from.getWorldPosition(new THREE.Vector3());
+    const b = to.getWorldPosition(new THREE.Vector3());
+    const axis = new THREE.Vector3().subVectors(b, a);
+    const len = axis.length();
+    if (len < 0.05) return;
+    const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(r, Math.max(len - r, 0.02), 3, 8), bodyMat);
+    mesh.name = name;
+    mesh.position.copy(a).addScaledVector(axis, 0.5);
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis.normalize());
+    mesh.updateMatrixWorld(true);
+    from.attach(mesh);
+    legs.push(mesh);
+  };
+  for (const side of ['Left', 'Right']) {
+    limb(rig.bones[`${side}UpLeg`], rig.bones[`${side}Leg`], 0.1, `bot-hitbox-thigh-${side}`);
+    limb(rig.bones[`${side}Leg`], rig.bones[`${side}Foot`], 0.08, `bot-hitbox-shin-${side}`);
+  }
+
   return {
     root,
     headMeshes: [head],
-    bodyMeshes: [body],
+    bodyMeshes: [body, ...legs],
   };
 }
 
@@ -2064,6 +2189,13 @@ export function createBotManager(opts: BotManagerOptions): BotManager {
       for (const bot of bots) {
         if (bot.team !== sourceTeam) bot.hearEnemyReload(at, duration);
       }
+    },
+
+    resetMatch() {
+      // Wipe each squad IN PLACE: every bot holds a reference to its squad
+      // object, so replacing it would leave the bots planning with the old one.
+      for (const s of squads.values()) Object.assign(s, createSquad(s.team, s.aimOf));
+      for (const bot of bots) bot.resetForMatch();
     },
 
     setDifficulty(d) {

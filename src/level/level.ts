@@ -140,7 +140,7 @@ export async function loadLevel(physics: Physics): Promise<Level> {
     )
       .setTranslation(fCenter.x, fCenter.y - LEVEL.floorThickness / 2, fCenter.z)
       .setFriction(0.9);
-    physics.tag(physics.world.createCollider(desc, body), { kind: 'world' });
+    physics.tag(physics.world.createCollider(desc, body), { kind: 'world', surface: 'concrete' });
   }
 
   // Fallback: if the model had no floor mesh at all, add a slab covering the
@@ -149,7 +149,7 @@ export async function loadLevel(physics: Physics): Promise<Level> {
     const desc = RAPIER.ColliderDesc.cuboid(size.x / 2, LEVEL.floorThickness / 2, size.z / 2)
       .setTranslation(0, -LEVEL.floorThickness / 2, 0)
       .setFriction(0.9);
-    physics.tag(physics.world.createCollider(desc, body), { kind: 'world' });
+    physics.tag(physics.world.createCollider(desc, body), { kind: 'world', surface: 'concrete' });
   }
 
   // ---- floor surface: matte concrete, not a wet mirror ----

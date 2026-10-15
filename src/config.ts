@@ -101,10 +101,16 @@ export const CAMERA = {
   far: 400,
   pitchMin: (-88 * Math.PI) / 180,
   pitchMax: (88 * Math.PI) / 180,
-  /** Radians per pixel of mouse movement. */
-  sensitivity: 0.0022,
-  /** Multiplier applied while aiming down sights. */
-  adsSensitivityScale: 0.55,
+  /**
+   * Radians per pixel of mouse movement at sensitivity 1.0 (the settings
+   * slider multiplies this). 0.0009 rad = 0.052 deg per count: ~40 deg per
+   * inch at 800 DPI, a full turn in about 23 cm — mid-range for PC shooters.
+   * The old 0.0022 (sensitivity 2.44 now) turned 100 deg per inch, which
+   * playtesters found twitchy.
+   */
+  sensitivity: 0.0009,
+  /** Default multiplier while aiming down sights (the ADS slider's default). */
+  adsSensitivityScale: 0.75,
   /** Smoothing half-life for the eye position, seconds. */
   followHalfLife: 0.045,
   /** Seconds to blend between the hip and ADS field of view. */
@@ -579,6 +585,8 @@ export const MATCH = {
   timeLimit: 300,
   /** The player fights alone (BLUE) against this many enemy bots (RED). */
   enemyCount: 4,
+  /** Seconds the end-of-match screen waits before returning to the main menu. */
+  endScreenSeconds: 30,
 } as const;
 
 /**
@@ -669,6 +677,8 @@ export const BOT = {
     tightenTime: 1.0,
     /** Aim error multiplier while the bot is moving. */
     movingScale: 2.1,
+    /** Aim error multiplier against a target moving at 4 m/s or faster. */
+    movingTargetScale: 1.9,
     /** Aim error multiplier while the bot is crouched. */
     crouchScale: 0.7,
     /** Vertical aim point above the target's capsule centre, metres. */
@@ -687,8 +697,10 @@ export const BOT = {
 
   /** Patrol behaviour. */
   patrol: {
-    /** Radius of the random navmesh point searched around the bot, metres. */
-    wanderRadius: 14,
+    /** Patrol lane centre X per bot slot, metres: west flank, east flank, centre-left, centre-right. */
+    lanes: [-6.3, 6.3, -1.5, 1.5],
+    /** How far a patrol point may stray from the bot's lane anchor, metres. */
+    laneWander: 4.5,
     /** Seconds spent standing still at a patrol point before moving on. */
     idleMin: 0.5,
     idleMax: 2.0,
@@ -710,6 +722,10 @@ export const BOT = {
     rangeMax: 20,
     /** Speed while moving up on a last known position, weapon raised, m/s. */
     pushSpeed: 2.4,
+    /** A bot only fires when its body faces within this many degrees of the aim. */
+    fireConeDeg: 20,
+    /** Radius of the ring of per-bot slots around a shared goal, metres. */
+    spreadRadius: 3,
     /** Cap on how long a heard sound is remembered for travel, seconds. */
     maxInvestigateTravel: 20,
     /** Within this distance of a suspected enemy, a moving bot aims at it. */
@@ -776,7 +792,9 @@ export const BOT = {
     /** A bot inside this angle of the player's aim knows it is being aimed at, degrees. */
     aimedAtDeg: 5,
     /** Bots keep at least this far apart while moving, metres. */
-    separation: 1.8,
+    separation: 2.8,
+    /** Cover spots closer than this to a teammate (or a teammate's spot) are skipped, metres. */
+    coverSpacing: 3,
     /** Search zones rotate between bots this often, seconds. */
     searchRotate: 12,
     /** Roles are re-assigned this often, seconds. */

@@ -39,12 +39,22 @@ export interface SettingsValues {
   cameraBob: CameraBobMode;
   /** Master volume. */
   volume: VolumeMode;
+  /** Mouse sensitivity, a multiplier on `CAMERA.sensitivity`. */
+  sensitivity: number;
+  /** Sensitivity while aiming down sights, relative to `sensitivity`. */
+  adsSensitivity: number;
 }
+
+/** Slider ranges, shared by the panel and by validation on load. */
+export const SENSITIVITY_RANGE = { min: 0.1, max: 4, step: 0.05 } as const;
+export const ADS_SENSITIVITY_RANGE = { min: 0.2, max: 1.5, step: 0.05 } as const;
 
 export const DEFAULT_SETTINGS: SettingsValues = {
   adsCenterDot: true,
   cameraBob: 'low',
   volume: 'normal',
+  sensitivity: 1,
+  adsSensitivity: CAMERA.adsSensitivityScale,
 };
 
 /**
@@ -136,6 +146,10 @@ function loadInto(values: SettingsValues) {
       values.cameraBob = parsed.cameraBob;
     }
     if (parsed.volume && parsed.volume in VOLUME_GAIN) values.volume = parsed.volume;
+    const inRange = (v: unknown, r: { min: number; max: number }) =>
+      typeof v === 'number' && Number.isFinite(v) && v >= r.min && v <= r.max;
+    if (inRange(parsed.sensitivity, SENSITIVITY_RANGE)) values.sensitivity = parsed.sensitivity!;
+    if (inRange(parsed.adsSensitivity, ADS_SENSITIVITY_RANGE)) values.adsSensitivity = parsed.adsSensitivity!;
   } catch {
     // Corrupt or unavailable storage: the defaults are already in place.
   }
@@ -177,6 +191,49 @@ function buildPanel(
   panel.append(title, intro);
 
   const syncers: (() => void)[] = [];
+
+  /** A labelled range slider bound to a numeric setting. */
+  const slider = (
+    label: string,
+    help: string,
+    key: 'sensitivity' | 'adsSensitivity',
+    range: { min: number; max: number; step: number }
+  ) => {
+    const row = settingRow(label, help);
+    const group = document.createElement('div');
+    group.className = 'settings__group';
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.className = 'settings__slider';
+    input.min = String(range.min);
+    input.max = String(range.max);
+    input.step = String(range.step);
+    const readout = document.createElement('span');
+    readout.className = 'settings__value';
+    input.addEventListener('input', () => set(key, Number(input.value)));
+    // Keys must adjust the slider, not leak into the game behind the panel.
+    input.addEventListener('keydown', (e) => e.stopPropagation());
+    group.append(input, readout);
+    row.control.appendChild(group);
+    syncers.push(() => {
+      input.value = String(values[key]);
+      readout.textContent = values[key].toFixed(2);
+    });
+    panel.appendChild(row.root);
+  };
+
+  slider(
+    'Mouse sensitivity',
+    'How far the view turns per mouse movement. 1.00 is a full turn in about 23 cm at 800 DPI.',
+    'sensitivity',
+    SENSITIVITY_RANGE
+  );
+  slider(
+    'ADS sensitivity',
+    'Multiplier while aiming down sights. Below 1 slows the view for precise aim.',
+    'adsSensitivity',
+    ADS_SENSITIVITY_RANGE
+  );
 
   // ---- ADS centre dot ----
   {

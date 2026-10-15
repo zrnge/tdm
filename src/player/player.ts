@@ -84,6 +84,11 @@ export interface Player {
   /** Yaw/pitch the player is looking along, radians. */
   yaw: number;
   pitch: number;
+  /**
+   * Multiplier on `CAMERA.sensitivity`: the player's sensitivity setting, eased
+   * toward their ADS setting while aiming. Set by main.ts every frame.
+   */
+  lookScale: number;
   update(dt: number): void;
   teleport(to: THREE.Vector3): void;
   dispose(): void;
@@ -175,6 +180,7 @@ export function createPlayer(
   let speed = 0;
   let yaw = 0;
   let pitch = 0;
+  let lookScale = 1;
   let sinceGrounded = 0;
   let currentHalfHeight = halfHeightFor(PLAYER.height, radius);
 
@@ -183,8 +189,9 @@ export function createPlayer(
   function update(dt: number) {
     // ---- look ----
     if (input.pointerLocked) {
-      yaw -= input.mouseDX * CAMERA.sensitivity;
-      pitch -= input.mouseDY * CAMERA.sensitivity;
+      const k = CAMERA.sensitivity * lookScale;
+      yaw -= input.mouseDX * k;
+      pitch -= input.mouseDY * k;
       pitch = THREE.MathUtils.clamp(pitch, CAMERA.pitchMin, CAMERA.pitchMax);
     }
 
@@ -206,7 +213,16 @@ export function createPlayer(
     if (input.active('right')) moveDir.x += 1;
     if (moveDir.lengthSq() > 0) moveDir.normalize().applyAxisAngle(UP, yaw);
 
-    sprinting = input.active('sprint') && !crouching && moveDir.lengthSq() > 0;
+    // A sprint is a forward run with the rifle down: not backwards, not while
+    // aiming down sights and not while firing.
+    sprinting =
+      input.active('sprint') &&
+      input.active('forward') &&
+      !input.active('back') &&
+      !input.aiming &&
+      !input.firing &&
+      !crouching &&
+      moveDir.lengthSq() > 0;
 
     const targetSpeed = crouching
       ? PLAYER.crouchSpeed
@@ -414,6 +430,12 @@ export function createPlayer(
     },
     set pitch(v: number) {
       pitch = v;
+    },
+    get lookScale() {
+      return lookScale;
+    },
+    set lookScale(v: number) {
+      lookScale = v;
     },
     update,
     teleport(to: THREE.Vector3) {

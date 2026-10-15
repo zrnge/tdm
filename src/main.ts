@@ -33,6 +33,8 @@ import { createPlayerWeapons } from './weapons/playerWeapons';
 import { createHud } from './hud/hud';
 import { createCreditsScreen } from './hud/credits';
 import { createPauseMenu } from './hud/pauseMenu';
+import { createMatchEndScreen } from './hud/matchEnd';
+import { createFpsCounter } from './hud/fps';
 import { createSettings, VOLUME_GAIN } from './game/settings';
 import { createMatch } from './game/match';
 import { createDebugOverlay } from './debug/overlay';
@@ -141,6 +143,7 @@ async function main() {
   const effects = createEffects(engine.scene);
   const hud = createHud(settings);
   const credits = createCreditsScreen();
+  createFpsCounter();
 
   // ---- sound ----
   // Starts silent: browsers only allow audio after a click, so the context is
@@ -152,8 +155,17 @@ async function main() {
 
   const match = createMatch({
     onEnd(winner) {
-      console.log(`[match] ${TEAM[winner].name} wins`);
-      hud.setScoreboard(true, match.scoreboard(combat.combatants, 'player'));
+      console.log(`[match] ${winner ? `${TEAM[winner].name} wins` : 'draw'}`);
+      // The game freezes behind the result (see the paused check in the frame
+      // loop) and the mouse is freed for the buttons.
+      hud.setScoreboard(false, []);
+      matchEnd.show({
+        winner,
+        scores: { ...match.scores },
+        rows: match.scoreboard(combat.combatants, 'player'),
+        playerTeam: 'blue',
+      });
+      if (document.pointerLockElement) document.exitPointerLock();
     },
   });
 
@@ -185,23 +197,43 @@ async function main() {
       match.record(attacker, target);
     },
     onRespawn(target) {
-      if (target.id === 'player') {
-        const at = level.randomSpawn('blue');
-        player.teleport(at);
-        player.yaw = Math.PI;
-        weapons.respawn();
-        return;
-      }
-      // A bot respawned. `combat.ts` has already restored its health and spawn
-      // protection; all that is left is to put it back on the floor at its own
-      // team's end of the hall. `bot.ts` resets its own state machine when it
-      // notices it is alive again.
-      const bot = bots.bots.find((b) => b.id === target.id);
-      if (!bot) return;
-      const at = level.randomSpawn(target.team);
-      bot.teleport(at);
+      placeAtSpawn(target);
     },
   });
+
+  /**
+   * Puts a combatant back at its own team's spawn, ready to fight. Used on
+   * respawn and when a new match starts. For a bot, `combat.ts` has already
+   * restored health and spawn protection, and `bot.ts` resets its own state
+   * machine when it notices it is alive again.
+   */
+  function placeAtSpawn(target: Combatant) {
+    if (target.id === 'player') {
+      player.teleport(level.randomSpawn('blue'));
+      player.yaw = Math.PI;
+      player.pitch = 0;
+      weapons.respawn();
+      return;
+    }
+    bots.bots.find((b) => b.id === target.id)?.teleport(level.randomSpawn(target.team));
+  }
+
+  /** A fresh match in place: scores, clock, everyone alive at their spawn. */
+  function resetMatch() {
+    match.reset();
+    for (const c of combat.combatants) {
+      c.kills = 0;
+      c.deaths = 0;
+      c.assists = 0;
+      c.alive = true;
+      c.health = COMBAT.maxHealth;
+      c.respawnIn = 0;
+      c.protection = SPAWN.protectionTime;
+      placeAtSpawn(c);
+    }
+    bots.resetMatch();
+    hud.setScoreboard(false, []);
+  }
 
   // ---- the player as a combatant ----
   // `root` is the invisible hit proxy, not a body: bots raycast against it to
@@ -386,7 +418,7 @@ async function main() {
     // Nothing advances — not the clock, the bots, combat or physics — so the
     // match cannot run on behind a menu and nobody can be shot while it is up.
     // The engine still renders, so the frozen scene shows behind the overlay.
-    if (!started || !input.pointerLocked) {
+    if (!started || !input.pointerLocked || match.over) {
       input.endFrame();
       return;
     }
@@ -394,6 +426,11 @@ async function main() {
     if (input.pressed('debug')) debugOverlay.toggle();
     if (input.pressed('debugColliders')) colliderView.toggle();
 
+    // Look speed: the sensitivity setting, eased toward the ADS setting as the
+    // sights come up so the transition never jerks the view.
+    player.lookScale =
+      settings.values.sensitivity *
+      THREE.MathUtils.lerp(1, settings.values.adsSensitivity, weapons.adsAmount);
     player.update(dt);
     hitbox.update(player);
     camera.setAiming(weapons.aiming && self.alive);
@@ -710,11 +747,50 @@ async function main() {
   /** Takes the pointer lock (which starts or resumes play). Must run in a click. */
   function lockPointer(onRefused?: () => void) {
     audio.resume();
-    const request = canvas.requestPointerLock() as unknown as Promise<void> | undefined;
-    request?.catch(() => onRefused?.());
+    // Raw input: the OS pointer acceleration is switched off, so the same
+    // mouse movement always turns the view by the same angle. Browsers or
+    // platforms without it reject with NotSupportedError; fall back to a plain
+    // lock then.
+    type LockOptions = { unadjustedMovement?: boolean };
+    const lock = canvas.requestPointerLock as unknown as (o?: LockOptions) => Promise<void> | undefined;
+    const request = lock.call(canvas, { unadjustedMovement: true });
+    request?.catch((err: DOMException) => {
+      if (err?.name === 'NotSupportedError') {
+        lock.call(canvas)?.catch(() => onRefused?.());
+      } else {
+        onRefused?.();
+      }
+    });
   }
 
   startBtn.addEventListener('click', () => lockPointer());
+
+  /** Back to the start screen with a fresh match waiting behind it. */
+  function goToMainMenu() {
+    matchEnd.hide();
+    pauseMenu.hide();
+    settings.hide();
+    credits.hide();
+    resetMatch();
+    started = false;
+    if (document.pointerLockElement) document.exitPointerLock();
+    bootEl.classList.remove('boot--hidden');
+  }
+
+  // ---- end of match: PLAY AGAIN / MAIN MENU (auto after 30 s) ----
+  const matchEnd = createMatchEndScreen({
+    onPlayAgain() {
+      matchEnd.hide();
+      resetMatch();
+      // If the browser refuses the lock (too soon after it was released),
+      // the pause menu takes over with its own "click RESUME" hint.
+      lockPointer(() => {
+        pauseMenu.show();
+        pauseMenu.resumeRefused();
+      });
+    },
+    onMainMenu: goToMainMenu,
+  });
 
   // ---- Esc: pause menu, not the boot screen ----
   const pauseMenu = createPauseMenu({
@@ -729,10 +805,7 @@ async function main() {
     onCredits() {
       credits.show();
     },
-    onQuit() {
-      // A fresh load is the only full reset: level, bots, scores and clock.
-      location.reload();
-    },
+    onQuit: () => goToMainMenu(),
   });
 
   document.addEventListener('pointerlockchange', () => {
@@ -740,7 +813,8 @@ async function main() {
     if (locked) started = true;
     bootEl.classList.toggle('boot--hidden', locked || started);
     if (locked) pauseMenu.hide();
-    else if (started) pauseMenu.show();
+    // Losing the mouse at the end of a match is the end screen's doing.
+    else if (started && !match.over && !matchEnd.visible) pauseMenu.show();
   });
 
   // Esc with the mouse already free closes whatever sits over the pause menu.

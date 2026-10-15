@@ -24,6 +24,8 @@ export interface ColliderTag {
   entityId?: string;
   /** Set for characters: which body part, used for headshot detection. */
   part?: 'body' | 'head';
+  /** What a bullet striking this collider hits, for the impact effect and mark. */
+  surface?: 'metal' | 'concrete' | 'wood';
 }
 
 export interface Physics {

@@ -44,7 +44,10 @@ const TRACER_COUNT = 24;
 const TRACER_LIFE = 0.055;
 const DECAL_COUNT = 48;
 const DECAL_LIFE = 14;
-const DECAL_SIZE = 0.17;
+/** Bullet-hole diameter per surface, metres: a rifle round chips wood and concrete wider than steel. */
+const HOLE_SIZE = { metal: 0.055, concrete: 0.075, wood: 0.08 } as const;
+
+type DecalSurface = keyof typeof HOLE_SIZE;
 const PARTICLE_COUNT = 220;
 const PARTICLE_LIFE = 0.7;
 
@@ -103,13 +106,17 @@ export function createEffects(scene: THREE.Scene): Effects {
   // they all share one shader program.
   interface Decal {
     mesh: THREE.Mesh;
-    material: THREE.MeshBasicMaterial;
+    material: THREE.MeshStandardMaterial;
     life: number;
   }
   const decals: Decal[] = [];
   let decalCursor = 0;
   /** The quad's own facing axis, turned onto the hit normal. */
   const FORWARD = new THREE.Vector3(0, 0, 1);
+  const UP_AXIS = new THREE.Vector3(0, 1, 0);
+  const decalX = new THREE.Vector3();
+  const decalY = new THREE.Vector3();
+  const decalBasis = new THREE.Matrix4();
 
   // ---- particles ----
   const particlePos = new Float32Array(PARTICLE_COUNT * 3);
@@ -121,8 +128,22 @@ export function createEffects(scene: THREE.Scene): Effects {
   const particleGeo = new THREE.BufferGeometry();
   particleGeo.setAttribute('position', new THREE.BufferAttribute(particlePos, 3));
   particleGeo.setAttribute('color', new THREE.BufferAttribute(particleColor, 3));
+  // A soft round dot: untextured points render as hard squares, which up close
+  // read as confetti rather than sparks and dust.
+  const dotCanvas = document.createElement('canvas');
+  dotCanvas.width = dotCanvas.height = 32;
+  const dotCtx = dotCanvas.getContext('2d')!;
+  const dotGrad = dotCtx.createRadialGradient(16, 16, 0, 16, 16, 16);
+  dotGrad.addColorStop(0, 'rgba(255,255,255,1)');
+  dotGrad.addColorStop(0.35, 'rgba(255,255,255,0.8)');
+  dotGrad.addColorStop(1, 'rgba(255,255,255,0)');
+  dotCtx.fillStyle = dotGrad;
+  dotCtx.fillRect(0, 0, 32, 32);
+  const dotTex = new THREE.CanvasTexture(dotCanvas);
+  disposables.push(dotTex);
   const particleMat = new THREE.PointsMaterial({
-    size: 0.055,
+    map: dotTex,
+    size: 0.04,
     vertexColors: true,
     transparent: true,
     opacity: 0.9,
@@ -164,30 +185,29 @@ export function createEffects(scene: THREE.Scene): Effects {
   const BLOOD = new THREE.Color(0xb02020);
 
   /**
-   * A soft radial scorch mark, generated once and shared by every decal.
+   * Bullet-hole textures, generated once per surface: three variants each.
    *
-   * Declared here, ABOVE the `return`, because `decalTexture()` is called from
-   * the returned object. A `let` binding is not hoisted the way a `function`
-   * declaration is: leaving it below the return would put it in the temporal
-   * dead zone and throw on the first shot.
+   * Declared here, ABOVE the `return`, because they are used from the returned
+   * object. A `let` binding is not hoisted the way a `function` declaration is:
+   * leaving it below the return would put it in the temporal dead zone and
+   * throw on the first shot.
    */
-  let decalTex: THREE.CanvasTexture | null = null;
-  function decalTexture(): THREE.CanvasTexture {
-    if (decalTex) return decalTex;
-    const size = 64;
-    const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = size;
-    const ctx = canvas.getContext('2d')!;
-    const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-    grad.addColorStop(0, 'rgba(12,10,9,0.95)');
-    grad.addColorStop(0.45, 'rgba(20,17,15,0.7)');
-    grad.addColorStop(1, 'rgba(30,26,22,0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, size, size);
-    decalTex = new THREE.CanvasTexture(canvas);
-    decalTex.colorSpace = THREE.SRGBColorSpace;
-    disposables.push(decalTex);
-    return decalTex;
+  let holeTextures: Record<DecalSurface, THREE.CanvasTexture[]> | null = null;
+  function holeTexture(surface: DecalSurface): THREE.CanvasTexture {
+    if (!holeTextures) {
+      holeTextures = { metal: [], concrete: [], wood: [] };
+      for (const kind of ['metal', 'concrete', 'wood'] as DecalSurface[]) {
+        for (let v = 0; v < 3; v++) {
+          const tex = new THREE.CanvasTexture(drawBulletHole(kind));
+          tex.colorSpace = THREE.SRGBColorSpace;
+          tex.anisotropy = 4;
+          disposables.push(tex);
+          holeTextures[kind].push(tex);
+        }
+      }
+    }
+    const list = holeTextures[surface];
+    return list[Math.floor(Math.random() * list.length)];
   }
 
   return {
@@ -323,12 +343,17 @@ export function createEffects(scene: THREE.Scene): Effects {
   /** The decal pool, created on first use. */
   function decalPool(): Decal[] {
     if (decals.length) return decals;
-    const geometry = new THREE.PlaneGeometry(DECAL_SIZE, DECAL_SIZE);
+    // A unit quad, scaled per hit to the surface's hole size.
+    const geometry = new THREE.PlaneGeometry(1, 1);
     disposables.push(geometry);
-    const map = decalTexture();
+    const map = holeTexture('metal');
     for (let i = 0; i < DECAL_COUNT; i++) {
-      const material = new THREE.MeshBasicMaterial({
+      // Lit, so a hole in a dark corner is dark and one under a lamp is not;
+      // an unlit mark reads as a black sticker.
+      const material = new THREE.MeshStandardMaterial({
         map,
+        roughness: 0.85,
+        metalness: 0,
         transparent: true,
         opacity: 1,
         depthWrite: false,
@@ -359,17 +384,151 @@ export function createEffects(scene: THREE.Scene): Effects {
    * invisible in practice because the player has moved on by then.
    */
   function addDecal(hit: HitResult) {
+    if (hit.surface === 'flesh') return;
+    const surface: DecalSurface = hit.surface;
     const pool = decalPool();
     const d = pool[decalCursor];
     decalCursor = (decalCursor + 1) % pool.length;
 
     const m = d.mesh;
-    m.quaternion.setFromUnitVectors(FORWARD, hit.normal);
-    m.rotateZ(Math.random() * Math.PI * 2);
-    m.position.copy(hit.point).addScaledVector(hit.normal, 0.004);
+    if (surface === 'wood') {
+      // Splinters run along the grain, which is horizontal on these crates:
+      // lay the texture's X axis level instead of spinning it at random.
+      const n = hit.normal;
+      decalX.crossVectors(UP_AXIS, n);
+      if (decalX.lengthSq() < 1e-4) decalX.set(1, 0, 0);
+      decalX.normalize();
+      decalY.crossVectors(n, decalX);
+      decalBasis.makeBasis(decalX, decalY, n);
+      m.quaternion.setFromRotationMatrix(decalBasis);
+      m.rotateZ((Math.random() - 0.5) * 0.3);
+    } else {
+      m.quaternion.setFromUnitVectors(FORWARD, hit.normal);
+      m.rotateZ(Math.random() * Math.PI * 2);
+    }
+    const size = HOLE_SIZE[surface] * THREE.MathUtils.randFloat(0.85, 1.15);
+    m.scale.set(size, size, 1);
+    m.position.copy(hit.point).addScaledVector(hit.normal, 0.003);
     m.updateMatrix();
     m.visible = true;
-    d.material.opacity = 1;
+
+    const mat = d.material;
+    mat.map = holeTexture(surface);
+    // The scraped ring on steel is bare metal and should catch the light.
+    mat.metalness = surface === 'metal' ? 0.55 : 0;
+    mat.roughness = surface === 'metal' ? 0.45 : 0.9;
+    mat.opacity = 1;
     d.life = DECAL_LIFE;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Bullet-hole drawing
+// ---------------------------------------------------------------------------
+
+const HOLE_PX = 128;
+
+/** A closed ragged outline around (cx, cy): radius `r` with per-vertex jitter, stretched in X by `sx`. */
+function raggedPath(ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number, jitter: number, sx = 1, steps = 22) {
+  ctx.beginPath();
+  for (let i = 0; i <= steps; i++) {
+    const a = (i / steps) * Math.PI * 2;
+    const rr = r * (1 - jitter / 2 + Math.random() * jitter);
+    const x = cx + Math.cos(a) * rr * sx;
+    const y = cy + Math.sin(a) * rr;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+}
+
+/** A crooked stroke from radius `r0` out to `r1` along angle `a`, about the centre `c`. */
+function crackPath(ctx: CanvasRenderingContext2D, c: number, a: number, r0: number, r1: number) {
+  ctx.beginPath();
+  ctx.moveTo(c + Math.cos(a) * r0, c + Math.sin(a) * r0);
+  const segments = 4;
+  for (let i = 1; i <= segments; i++) {
+    const r = r0 + ((r1 - r0) * i) / segments;
+    const aa = a + (Math.random() - 0.5) * 0.35;
+    ctx.lineTo(c + Math.cos(aa) * r, c + Math.sin(aa) * r);
+  }
+  ctx.stroke();
+}
+
+/** Paints one bullet-hole variant for `kind` onto a fresh transparent canvas. */
+function drawBulletHole(kind: DecalSurface): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = HOLE_PX;
+  const ctx = canvas.getContext('2d')!;
+  const c = HOLE_PX / 2;
+  const R = HOLE_PX / 2;
+  ctx.lineCap = 'round';
+
+  if (kind === 'metal') {
+    // Paint blown off around the impact, showing bright bare steel.
+    raggedPath(ctx, c, c, R * 0.5, 0.25);
+    ctx.fillStyle = 'rgba(182, 178, 170, 0.95)';
+    ctx.fill();
+    // Scuffs radiating out of the strike.
+    ctx.strokeStyle = 'rgba(205, 200, 192, 0.55)';
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 6; i++) crackPath(ctx, c, Math.random() * Math.PI * 2, R * 0.25, R * (0.55 + Math.random() * 0.25));
+    // Scorch around the hole.
+    const scorch = ctx.createRadialGradient(c, c, R * 0.12, c, c, R * 0.42);
+    scorch.addColorStop(0, 'rgba(35, 30, 26, 0.95)');
+    scorch.addColorStop(1, 'rgba(35, 30, 26, 0)');
+    ctx.fillStyle = scorch;
+    ctx.fillRect(0, 0, HOLE_PX, HOLE_PX);
+    // The hole, with a lip of pushed-in metal catching the light.
+    raggedPath(ctx, c, c, R * 0.17, 0.12);
+    ctx.fillStyle = '#060504';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(225, 220, 210, 0.7)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  } else if (kind === 'concrete') {
+    // Chipped crater of fresh, paler concrete with a ragged rim.
+    raggedPath(ctx, c, c, R * 0.6, 0.4, 1, 28);
+    ctx.fillStyle = 'rgba(158, 153, 145, 0.95)';
+    ctx.fill();
+    const crater = ctx.createRadialGradient(c, c, 0, c, c, R * 0.48);
+    crater.addColorStop(0, 'rgba(48, 45, 42, 0.95)');
+    crater.addColorStop(1, 'rgba(48, 45, 42, 0)');
+    ctx.fillStyle = crater;
+    ctx.fillRect(0, 0, HOLE_PX, HOLE_PX);
+    // Hairline cracks running out past the crater.
+    ctx.strokeStyle = 'rgba(30, 28, 26, 0.75)';
+    ctx.lineWidth = 1.4;
+    const cracks = 3 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < cracks; i++) crackPath(ctx, c, Math.random() * Math.PI * 2, R * 0.15, R * (0.7 + Math.random() * 0.25));
+    raggedPath(ctx, c, c, R * 0.12, 0.3);
+    ctx.fillStyle = '#0a0908';
+    ctx.fill();
+  } else {
+    // Raw pale wood torn out along the grain (texture X is the grain).
+    raggedPath(ctx, c, c, R * 0.42, 0.45, 1.7, 26);
+    ctx.fillStyle = 'rgba(224, 192, 142, 0.95)';
+    ctx.fill();
+    // Splinters: long thin streaks along the grain, light and dark.
+    for (let i = 0; i < 14; i++) {
+      const y = c + (Math.random() - 0.5) * R * 0.55;
+      const len = R * (0.35 + Math.random() * 0.55);
+      const dir = Math.random() < 0.5 ? -1 : 1;
+      ctx.strokeStyle = Math.random() < 0.6 ? 'rgba(242, 218, 175, 0.9)' : 'rgba(112, 78, 46, 0.8)';
+      ctx.lineWidth = 1 + Math.random() * 1.5;
+      ctx.beginPath();
+      ctx.moveTo(c + dir * R * 0.1, y);
+      ctx.lineTo(c + dir * len, y + (Math.random() - 0.5) * 4);
+      ctx.stroke();
+    }
+    const torn = ctx.createRadialGradient(c, c, R * 0.08, c, c, R * 0.3);
+    torn.addColorStop(0, 'rgba(60, 38, 20, 0.9)');
+    torn.addColorStop(1, 'rgba(60, 38, 20, 0)');
+    ctx.fillStyle = torn;
+    ctx.fillRect(0, 0, HOLE_PX, HOLE_PX);
+    raggedPath(ctx, c, c, R * 0.13, 0.35);
+    ctx.fillStyle = '#120c07';
+    ctx.fill();
+  }
+  return canvas;
 }

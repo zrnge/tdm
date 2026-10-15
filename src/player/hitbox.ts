@@ -35,6 +35,12 @@ export interface PlayerHitbox {
 /** Body capsule: feet to chest. The head is a separate sphere above it. */
 const BODY_TOP = 1.5;
 const HEAD_RADIUS = 0.13;
+/**
+ * Radius of the body proxy, metres. NOT the physics capsule's radius (0.35):
+ * that one keeps the camera out of walls, and as a hitbox it made the player
+ * 0.70 m wide against a bot's 0.49 m torso. Matched to the bots' torso.
+ */
+const BODY_RADIUS = 0.24;
 
 export function createPlayerHitbox(): PlayerHitbox {
   const root = new THREE.Group();
@@ -46,7 +52,7 @@ export function createPlayerHitbox(): PlayerHitbox {
   const headMat = new THREE.MeshBasicMaterial();
   headMat.visible = false;
 
-  const radius = PLAYER.radius;
+  const radius = BODY_RADIUS;
   const bodyLength = Math.max(BODY_TOP - radius * 2, 0.1);
   const bodyGeo = new THREE.CapsuleGeometry(radius, bodyLength, 4, 12);
   const body = new THREE.Mesh(bodyGeo, bodyMat);

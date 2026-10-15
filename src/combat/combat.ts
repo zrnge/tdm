@@ -199,6 +199,8 @@ export function createCombat(physics: Physics, events: CombatEvents = {}): Comba
    */
   /** Surface normal of the last `worldHitDistance` hit, world space. */
   const worldNormal = new THREE.Vector3();
+  /** Material of the collider the last `worldHitDistance` hit, when tagged. */
+  let worldSurface: 'metal' | 'concrete' | 'wood' | undefined;
 
   /**
    * Distance to the first non-character collider along the ray, or Infinity.
@@ -230,8 +232,10 @@ export function createCombat(physics: Physics, events: CombatEvents = {}): Comba
         return kind !== 'character' && kind !== 'blocker';
       }
     );
+    worldSurface = undefined;
     if (!hit) return Infinity;
     worldNormal.set(hit.normal.x, hit.normal.y, hit.normal.z);
+    worldSurface = physics.tagOf(hit.collider)?.surface;
     return hit.timeOfImpact;
   }
 
@@ -331,7 +335,7 @@ export function createCombat(physics: Physics, events: CombatEvents = {}): Comba
       headshot,
       blocked: blocked && !target,
       distance: hitDistance,
-      surface: target ? 'flesh' : classifySurface(point),
+      surface: target ? 'flesh' : (worldSurface ?? untaggedSurface(point)),
     };
 
     if (target) {
@@ -421,18 +425,11 @@ function isDescendant(node: THREE.Object3D, ancestor: THREE.Object3D): boolean {
 }
 
 /**
- * Classifies the impact surface for the right effect: sparks on metal, dust on
- * concrete, splinters on wood.
- *
- * The level is a single `Metal` mesh and the cover is containers (metal),
- * racking (metal) and crates (wood), so the classification is by height and
- * position rather than by mesh, which is cheap and good enough for a particle
- * effect. Phase 4 replaces this with a per-mesh lookup.
+ * Surface for a collider with no `surface` tag: the warehouse's own trimesh,
+ * which is one steel shell with the concrete floor at its base. Cover props and
+ * the floor slab carry an explicit tag, so a container is never mistaken for a
+ * crate by where it happens to stand.
  */
-function classifySurface(point: THREE.Vector3): 'metal' | 'concrete' | 'wood' {
-  if (point.y < 0.08) return 'concrete';
-  // Crates sit at x = +/-3.9, +/-4.9, +/-6.1, +/-6.9 and on the centre line.
-  const ax = Math.abs(point.x);
-  if (ax > 3.5 && ax < 7.5 && point.y < 2.6) return 'wood';
-  return 'metal';
+function untaggedSurface(point: THREE.Vector3): 'metal' | 'concrete' {
+  return point.y < 0.08 ? 'concrete' : 'metal';
 }

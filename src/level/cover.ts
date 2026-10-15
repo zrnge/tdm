@@ -498,6 +498,7 @@ export function addCover(physics: Physics, ctx: CoverContext): Cover {
     half: HalfExtents,
     placements: Placement[],
     name: string,
+    surface: 'metal' | 'wood',
     parts?: PartBox[]
   ) => {
     const mesh = new THREE.InstancedMesh(geo, mat, placements.length);
@@ -526,7 +527,7 @@ export function addCover(physics: Physics, ctx: CoverContext): Cover {
         })
         .setFriction(0.85);
       const collider = physics.world.createCollider(desc, body);
-      physics.tag(collider, { kind: parts ? 'blocker' : 'prop' });
+      physics.tag(collider, { kind: parts ? 'blocker' : 'prop', surface });
       colliders.push(collider);
       props.push({ name: p.name, batch: name, mesh, index: i, collider, half });
 
@@ -542,7 +543,7 @@ export function addCover(physics: Physics, ctx: CoverContext): Cover {
             z: dummy.quaternion.z,
             w: dummy.quaternion.w,
           });
-        physics.tag(physics.world.createCollider(partDesc, body), { kind: 'prop' });
+        physics.tag(physics.world.createCollider(partDesc, body), { kind: 'prop', surface });
       }
     });
 
@@ -560,10 +561,10 @@ export function addCover(physics: Physics, ctx: CoverContext): Cover {
   const rackHalf = { x: COVER.rack.x / 2, y: COVER.rack.y / 2, z: COVER.rack.z / 2 };
   const crateHalf = { x: COVER.crate.x / 2, y: COVER.crate.y / 2, z: COVER.crate.z / 2 };
 
-  batch(containerGeo, containerMat, containerHalf, CONTAINERS_CROSS, 'cover-containers-cross');
-  batch(containerGeo, containerMat, containerHalf, CONTAINERS_LONG, 'cover-containers-long');
-  batch(rackGeo, rackMat, rackHalf, RACKS, 'cover-racks', rackParts());
-  batch(crateGeo, crateMat, crateHalf, CRATES, 'cover-crates');
+  batch(containerGeo, containerMat, containerHalf, CONTAINERS_CROSS, 'cover-containers-cross', 'metal');
+  batch(containerGeo, containerMat, containerHalf, CONTAINERS_LONG, 'cover-containers-long', 'metal');
+  batch(rackGeo, rackMat, rackHalf, RACKS, 'cover-racks', 'metal', rackParts());
+  batch(crateGeo, crateMat, crateHalf, CRATES, 'cover-crates', 'wood');
 
   // ---- spawn-to-spawn sightline ----
   // Eye height, because that is what a player actually sees along.
